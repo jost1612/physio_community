@@ -1,27 +1,12 @@
 #!/bin/bash
+set -e
 
-################################################################################
-# Physio AI - Automatisches Installations-Script
-#
-# Dieses Script richtet die Physio AI Applikation automatisch ein:
-# - Generiert sichere Passwörter und Secrets
-# - Erstellt die .env-Datei aus dem Template
-# - Startet die Docker-Container
-# - Erstellt den ersten Admin-User
-#
-# Verwendung:
-#   chmod +x install.sh
-#   ./install.sh
-################################################################################
-
-set -e  # Bei Fehler abbrechen
-
-# Farben für Output
-RED='\033[0;31m'
+# Farben
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
+RED='\033[0;31m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+YELLOW='\033[1;33m'
+NC='\033[0m'
 
 # Banner
 echo ""
@@ -29,334 +14,182 @@ echo "╔═══════════════════════�
 echo "║                                                              ║"
 echo "║              🏥 Physio AI - Installation                     ║"
 echo "║                                                              ║"
-echo "║  Personalplanung & Kapazitätsmanagement für Physiotherapie  ║"
-echo "║                                                              ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 
-# Prüfe ob Docker installiert ist
-if ! command -v docker &> /dev/null; then
-    echo -e "${RED}❌ Docker ist nicht installiert!${NC}"
-    echo ""
-    echo "Bitte installiere Docker zuerst:"
-    echo "  https://docs.docker.com/get-docker/"
-    echo ""
-    exit 1
-fi
-
-# Prüfe ob Docker Compose installiert ist
-if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
-    echo -e "${RED}❌ Docker Compose ist nicht installiert!${NC}"
-    echo ""
-    echo "Bitte installiere Docker Compose zuerst:"
-    echo "  https://docs.docker.com/compose/install/"
-    echo ""
-    exit 1
-fi
-
-# Setze DOCKER_COMPOSE Command (docker-compose oder docker compose)
-if command -v docker-compose &> /dev/null; then
-    DOCKER_COMPOSE="docker-compose"
-else
-    DOCKER_COMPOSE="docker compose"
-fi
-
-# Prüfe ob openssl installiert ist
-if ! command -v openssl &> /dev/null; then
-    echo -e "${RED}❌ openssl ist nicht installiert!${NC}"
-    echo ""
-    echo "Bitte installiere openssl zuerst:"
-    echo "  Linux: apt-get install openssl oder yum install openssl"
-    echo "  macOS: brew install openssl"
-    echo ""
-    exit 1
-fi
-
-echo -e "${BLUE}📋 Installations-Schritte:${NC}"
-echo "  1. Konfiguration prüfen"
-echo "  2. Sichere Passwörter generieren"
-echo "  3. .env-Datei erstellen"
-echo "  4. Docker-Container starten"
-echo "  5. Datenbank initialisieren"
-echo "  6. Admin-User erstellen"
-echo ""
-
-# Prüfe ob .env bereits existiert
-if [ -f ".env" ]; then
-    echo -e "${YELLOW}⚠️  .env-Datei existiert bereits!${NC}"
-    echo ""
-    read -p "Möchten Sie die bestehende .env-Datei überschreiben? (y/N): " -n 1 -r
-    echo ""
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo -e "${RED}❌ Installation abgebrochen.${NC}"
-        exit 1
-    fi
-fi
-
-# Prüfe ob Template existiert
-if [ ! -f ".env.prod.example" ]; then
-    echo -e "${RED}❌ .env.prod.example nicht gefunden!${NC}"
-    echo "Bitte stelle sicher, dass du im Projektverzeichnis bist."
-    exit 1
-fi
-
-echo ""
-echo -e "${GREEN}✓${NC} Voraussetzungen erfüllt"
-echo ""
+# 1. Voraussetzungen prüfen
+if ! command -v docker &> /dev/null; then echo -e "${RED}❌ Docker fehlt.${NC}"; exit 1; fi
+if ! command -v openssl &> /dev/null; then echo -e "${RED}❌ openssl fehlt.${NC}"; exit 1; fi
 
 # ========================================================================
-# SCHRITT 1: Benutzer-Konfiguration
+# SCHRITT 1-3: Konfiguration & .env
 # ========================================================================
-
-echo -e "${BLUE}📝 Schritt 1/6: Konfiguration${NC}"
-echo ""
+echo -e "${BLUE}📝 Konfiguration...${NC}"
 
 # Standard-Werte
 DEFAULT_DOMAIN="localhost"
 DEFAULT_BACKEND_PORT="8011"
 DEFAULT_FRONTEND_PORT="3011"
-DEFAULT_ADMIN_EMAIL="admin@physio-cockpit.local"
+DEFAULT_ADMIN_EMAIL="admin@physio.ai"
 
-# Frage nach Domain
-read -p "Domain (für Production, z.B. physio-cockpit.de) [$DEFAULT_DOMAIN]: " DOMAIN
-DOMAIN=${DOMAIN:-$DEFAULT_DOMAIN}
-
-# Frage nach Ports (nur bei localhost relevant)
-if [ "$DOMAIN" = "localhost" ] || [ "$DOMAIN" = "127.0.0.1" ]; then
-    read -p "Backend Port [$DEFAULT_BACKEND_PORT]: " BACKEND_PORT
-    BACKEND_PORT=${BACKEND_PORT:-$DEFAULT_BACKEND_PORT}
-
-    read -p "Frontend Port [$DEFAULT_FRONTEND_PORT]: " FRONTEND_PORT
-    FRONTEND_PORT=${FRONTEND_PORT:-$DEFAULT_FRONTEND_PORT}
-
-    FRONTEND_URL="http://${DOMAIN}:${FRONTEND_PORT}"
-    BACKEND_URL="http://${DOMAIN}:${BACKEND_PORT}"
-    WEBAUTHN_RP_ID="localhost"
-else
-    BACKEND_PORT="8011"
-    FRONTEND_PORT="3011"
-    FRONTEND_URL="https://${DOMAIN}"
-    BACKEND_URL="https://api.${DOMAIN}"
-    WEBAUTHN_RP_ID="${DOMAIN}"
-fi
-
-# Frage nach Admin-Email
-read -p "Admin E-Mail [$DEFAULT_ADMIN_EMAIL]: " ADMIN_EMAIL
-ADMIN_EMAIL=${ADMIN_EMAIL:-$DEFAULT_ADMIN_EMAIL}
-
-echo ""
-echo -e "${GREEN}✓${NC} Konfiguration abgeschlossen"
-echo ""
-
-# ========================================================================
-# SCHRITT 2: Passwörter & Secrets generieren
-# ========================================================================
-
-echo -e "${BLUE}🔐 Schritt 2/6: Sichere Passwörter generieren${NC}"
-echo ""
-
-# Generiere sichere Passwörter
-DB_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-SECRET_KEY=$(openssl rand -base64 64 | tr -d "\n")
-
-echo -e "${GREEN}✓${NC} Passwörter generiert"
-echo ""
-
-# ========================================================================
-# SCHRITT 3: .env-Datei erstellen
-# ========================================================================
-
-echo -e "${BLUE}📄 Schritt 3/6: .env-Datei erstellen${NC}"
-echo ""
-
-# Kopiere Template
-cp .env.prod.example .env
-
-# Ersetze Platzhalter in .env
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    # macOS sed syntax
-    sed -i '' "s|DB_PASSWORD=.*|DB_PASSWORD=${DB_PASSWORD}|g" .env
-    sed -i '' "s|SECRET_KEY=.*|SECRET_KEY=${SECRET_KEY}|g" .env
-    sed -i '' "s|FRONTEND_URL=.*|FRONTEND_URL=${FRONTEND_URL}|g" .env
-    sed -i '' "s|NEXT_PUBLIC_API_URL=.*|NEXT_PUBLIC_API_URL=${BACKEND_URL}|g" .env
-    sed -i '' "s|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=${FRONTEND_URL}|g" .env
-    sed -i '' "s|ADMIN_EMAIL=.*|ADMIN_EMAIL=${ADMIN_EMAIL}|g" .env
-    sed -i '' "s|WEBAUTHN_RP_ID=.*|WEBAUTHN_RP_ID=${WEBAUTHN_RP_ID}|g" .env
-    sed -i '' "s|BACKEND_PORT=.*|BACKEND_PORT=${BACKEND_PORT}|g" .env
-    sed -i '' "s|FRONTEND_PORT=.*|FRONTEND_PORT=${FRONTEND_PORT}|g" .env
-else
-    # Linux sed syntax
-    sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=${DB_PASSWORD}|g" .env
-    sed -i "s|SECRET_KEY=.*|SECRET_KEY=${SECRET_KEY}|g" .env
-    sed -i "s|FRONTEND_URL=.*|FRONTEND_URL=${FRONTEND_URL}|g" .env
-    sed -i "s|NEXT_PUBLIC_API_URL=.*|NEXT_PUBLIC_API_URL=${BACKEND_URL}|g" .env
-    sed -i "s|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=${FRONTEND_URL}|g" .env
-    sed -i "s|ADMIN_EMAIL=.*|ADMIN_EMAIL=${ADMIN_EMAIL}|g" .env
-    sed -i "s|WEBAUTHN_RP_ID=.*|WEBAUTHN_RP_ID=${WEBAUTHN_RP_ID}|g" .env
-    sed -i "s|BACKEND_PORT=.*|BACKEND_PORT=${BACKEND_PORT}|g" .env
-    sed -i "s|FRONTEND_PORT=.*|FRONTEND_PORT=${FRONTEND_PORT}|g" .env
-fi
-
-echo -e "${GREEN}✓${NC} .env-Datei erstellt"
-echo ""
-
-# ========================================================================
-# SCHRITT 4: Docker-Container starten
-# ========================================================================
-
-echo -e "${BLUE}🐳 Schritt 4/6: Docker-Container starten${NC}"
-echo ""
-
-# Stoppe alte Container falls vorhanden
-echo "Stoppe alte Container (falls vorhanden)..."
-$DOCKER_COMPOSE -f docker-compose.prod.yml down 2>/dev/null || true
-
-# Baue und starte Container
-echo "Baue Docker Images (das kann einige Minuten dauern)..."
-$DOCKER_COMPOSE -f docker-compose.prod.yml build --no-cache
-
-echo "Starte Container..."
-$DOCKER_COMPOSE -f docker-compose.prod.yml up -d
-
-echo ""
-echo -e "${GREEN}✓${NC} Container gestartet"
-echo ""
-
-# Warte auf Datenbank
-echo "Warte auf Datenbank-Start (max. 30 Sekunden)..."
-for i in {1..30}; do
-    if $DOCKER_COMPOSE -f docker-compose.prod.yml exec -T db pg_isready -U postgres > /dev/null 2>&1; then
-        echo -e "${GREEN}✓${NC} Datenbank ist bereit"
-        break
+if [ ! -f ".env" ]; then
+    if [ ! -f ".env.example" ]; then
+        echo -e "${RED}❌ Keine .env.example gefunden!${NC}"
+        exit 1
     fi
+    echo "Erstelle .env aus .env.example..."
+    cp .env.example .env
+
+    # Passwörter generieren
+    echo "Generiere sichere Passwörter..."
+    DB_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    SECRET_KEY=$(openssl rand -base64 64 | tr -d "\n")
+
+    # URLs setzen
+    FRONTEND_URL="http://${DEFAULT_DOMAIN}:${DEFAULT_FRONTEND_PORT}"
+    BACKEND_URL="http://${DEFAULT_DOMAIN}:${DEFAULT_BACKEND_PORT}"
+    WEBAUTHN_RP_ID="${DEFAULT_DOMAIN}"
+    
+    # Ersetzen in der .env Datei
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' "s|DB_PASSWORD=.*|DB_PASSWORD=${DB_PASSWORD}|g" .env
+        sed -i '' "s|SECRET_KEY=.*|SECRET_KEY=${SECRET_KEY}|g" .env
+        sed -i '' "s|FRONTEND_URL=.*|FRONTEND_URL=${FRONTEND_URL}|g" .env
+        sed -i '' "s|NEXT_PUBLIC_API_URL=.*|NEXT_PUBLIC_API_URL=${BACKEND_URL}|g" .env
+        sed -i '' "s|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=${FRONTEND_URL}|g" .env
+        sed -i '' "s|ADMIN_EMAIL=.*|ADMIN_EMAIL=${DEFAULT_ADMIN_EMAIL}|g" .env
+        sed -i '' "s|WEBAUTHN_RP_ID=.*|WEBAUTHN_RP_ID=${WEBAUTHN_RP_ID}|g" .env
+        sed -i '' "s|BACKEND_PORT=.*|BACKEND_PORT=${DEFAULT_BACKEND_PORT}|g" .env
+        sed -i '' "s|FRONTEND_PORT=.*|FRONTEND_PORT=${DEFAULT_FRONTEND_PORT}|g" .env
+    else
+        sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=${DB_PASSWORD}|g" .env
+        sed -i "s|SECRET_KEY=.*|SECRET_KEY=${SECRET_KEY}|g" .env
+        sed -i "s|FRONTEND_URL=.*|FRONTEND_URL=${FRONTEND_URL}|g" .env
+        sed -i "s|NEXT_PUBLIC_API_URL=.*|NEXT_PUBLIC_API_URL=${BACKEND_URL}|g" .env
+        sed -i "s|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=${FRONTEND_URL}|g" .env
+        sed -i "s|ADMIN_EMAIL=.*|ADMIN_EMAIL=${DEFAULT_ADMIN_EMAIL}|g" .env
+        sed -i "s|WEBAUTHN_RP_ID=.*|WEBAUTHN_RP_ID=${WEBAUTHN_RP_ID}|g" .env
+        sed -i "s|BACKEND_PORT=.*|BACKEND_PORT=${DEFAULT_BACKEND_PORT}|g" .env
+        sed -i "s|FRONTEND_PORT=.*|FRONTEND_PORT=${DEFAULT_FRONTEND_PORT}|g" .env
+    fi
+    echo -e "${GREEN}✓ .env Datei erstellt.${NC}"
+else
+    echo -e "${YELLOW}ℹ️  .env existiert bereits.${NC}"
+fi
+
+# ========================================================================
+# SCHRITT 4: Container starten
+# ========================================================================
+echo -e "${BLUE}🐳 Starte Container...${NC}"
+# Orphans entfernen um Konflikte zu vermeiden
+docker compose down --remove-orphans 2>/dev/null || true
+docker compose up -d
+
+# ========================================================================
+# SCHRITT 5: DB Check & Migrationen
+# ========================================================================
+echo "⏳ Warte auf Datenbank..."
+counter=0
+until docker compose exec backend python3 -c "from database import engine; engine.connect()" 2>/dev/null; do
+    sleep 2
+    counter=$((counter+1))
     echo -n "."
-    sleep 1
+    if [ $counter -gt 30 ]; then echo -e "\n${RED}❌ Timeout DB.${NC}"; exit 1; fi
 done
-echo ""
+echo -e "\n${GREEN}✅ Datenbank bereit.${NC}"
+
+echo "🔧 Migrationen..."
+docker compose exec backend alembic upgrade head || true
 
 # ========================================================================
-# SCHRITT 5: Datenbank initialisieren
+# SCHRITT 6: SCHEMA REPARATUR (WICHTIG!)
 # ========================================================================
-
-echo ""
-echo -e "${BLUE}🗄️  Schritt 5/6: Datenbank initialisieren${NC}"
-echo ""
-
-# Führe Alembic Migrationen aus
-echo "Führe Datenbank-Migrationen aus..."
-$DOCKER_COMPOSE -f docker-compose.prod.yml exec -T backend alembic upgrade head
-
-echo -e "${GREEN}✓${NC} Datenbank initialisiert"
-echo ""
-
-# ========================================================================
-# SCHRITT 6: Admin-User erstellen
-# ========================================================================
-
-echo ""
-echo -e "${BLUE}👤 Schritt 6/6: Admin-User erstellen${NC}"
-echo ""
-
-# Generiere Admin-Passwort
-ADMIN_PASSWORD=$(openssl rand -base64 16 | tr -d "=+/" | cut -c1-16)
-
-# Erstelle Admin-User
-echo "Erstelle Admin-Benutzer..."
-$DOCKER_COMPOSE -f docker-compose.prod.yml exec -T backend python create_admin.py \
-    --username admin \
-    --email "${ADMIN_EMAIL}" \
-    --password "${ADMIN_PASSWORD}" 2>&1 | grep -v "UserWarning" || true
-
-echo -e "${GREEN}✓${NC} Admin-User erstellt"
-echo ""
+# Damit wir KEINEN Employee für den Admin brauchen (sonst gehen Demo-Daten nicht!)
+echo -e "${BLUE}🛠️ Repariere Datenbankschema (Audit Log Fix)...${NC}"
+docker compose exec -T db psql -U postgres -d Planing -c "
+DO \$\$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'audit_logs_user_id_fkey') THEN
+        ALTER TABLE audit_logs DROP CONSTRAINT audit_logs_user_id_fkey;
+    END IF;
+    -- Verknüpfung auf USERS (nicht Employees) ändern
+    ALTER TABLE audit_logs ADD CONSTRAINT audit_logs_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL;
+EXCEPTION WHEN OTHERS THEN NULL;
+END \$\$;
+"
 
 # ========================================================================
-# FERTIG!
+# SCHRITT 7: Admin User erstellen
 # ========================================================================
+echo -e "${BLUE}👤 Erstelle Admin User...${NC}"
 
-echo ""
-echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║                                                              ║"
-echo "║              ✅ Installation erfolgreich!                    ║"
-echo "║                                                              ║"
-echo "╚══════════════════════════════════════════════════════════════╝"
-echo ""
-echo -e "${GREEN}📝 Zugangsdaten:${NC}"
-echo ""
-echo "  Frontend:  ${FRONTEND_URL}"
-echo "  Backend:   ${BACKEND_URL}"
-echo ""
-echo "  Admin-Benutzername: admin"
-echo "  Admin-Passwort:     ${ADMIN_PASSWORD}"
-echo "  Admin-Email:        ${ADMIN_EMAIL}"
-echo ""
-echo -e "${YELLOW}⚠️  WICHTIG: Speichern Sie diese Zugangsdaten sicher!${NC}"
-echo ""
-echo -e "${BLUE}📚 Nächste Schritte:${NC}"
-echo ""
-echo "  1. Öffne ${FRONTEND_URL} in deinem Browser"
-echo "  2. Melde dich mit den obigen Zugangsdaten an"
-echo "  3. Ändere dein Passwort im User-Profil"
-echo "  4. Konfiguriere SMTP für E-Mails (optional)"
-echo ""
-echo -e "${BLUE}🔧 Nützliche Befehle:${NC}"
-echo ""
-echo "  Container-Status anzeigen:"
-echo "    ${DOCKER_COMPOSE} -f docker-compose.prod.yml ps"
-echo ""
-echo "  Logs anzeigen:"
-echo "    ${DOCKER_COMPOSE} -f docker-compose.prod.yml logs -f"
-echo ""
-echo "  Container neustarten:"
-echo "    ${DOCKER_COMPOSE} -f docker-compose.prod.yml restart"
-echo ""
-echo "  Container stoppen:"
-echo "    ${DOCKER_COMPOSE} -f docker-compose.prod.yml down"
-echo ""
-echo "  Backup erstellen:"
-echo "    docker exec physio_db pg_dump -U postgres Planing > backup_\$(date +%Y%m%d).sql"
-echo ""
-echo -e "${GREEN}Viel Erfolg mit Physio AI! 🚀${NC}"
-echo ""
+ADMIN_USER="admin"
+ADMIN_EMAIL=$(grep ADMIN_EMAIL .env | cut -d '=' -f2 || echo "admin@physio.ai")
+ADMIN_PASS="admin123"
 
-# Speichere Zugangsdaten in Datei
-cat > INSTALLATION_INFO.txt <<EOF
-╔══════════════════════════════════════════════════════════════╗
-║              🏥 Physio AI - Installation                     ║
-╚══════════════════════════════════════════════════════════════╝
+docker compose exec -T backend python3 - <<EOF
+import sys
+import bcrypt
+from sqlalchemy import text
+from database import SessionLocal
 
-Installation abgeschlossen am: $(date)
+username = "${ADMIN_USER}"
+email = "${ADMIN_EMAIL}".strip()
+password = "${ADMIN_PASS}"
+salt = bcrypt.gensalt()
+hashed = bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
 
-Zugangsdaten:
--------------
-Frontend:  ${FRONTEND_URL}
-Backend:   ${BACKEND_URL}
-
-Admin-Benutzername: admin
-Admin-Passwort:     ${ADMIN_PASSWORD}
-Admin-Email:        ${ADMIN_EMAIL}
-
-Datenbank-Passwort: ${DB_PASSWORD}
-
-⚠️  WICHTIG: Diese Datei enthält sensible Zugangsdaten!
-    Bitte sicher aufbewahren und NICHT in Git committen!
-
-Nächste Schritte:
------------------
-1. Öffne ${FRONTEND_URL} in deinem Browser
-2. Melde dich mit den obigen Zugangsdaten an
-3. Ändere dein Passwort im User-Profil
-4. Konfiguriere SMTP für E-Mails (optional, siehe .env)
-
-Container-Verwaltung:
----------------------
-Status:     ${DOCKER_COMPOSE} -f docker-compose.prod.yml ps
-Logs:       ${DOCKER_COMPOSE} -f docker-compose.prod.yml logs -f
-Restart:    ${DOCKER_COMPOSE} -f docker-compose.prod.yml restart
-Stoppen:    ${DOCKER_COMPOSE} -f docker-compose.prod.yml down
-
-Backup:     docker exec physio_db pg_dump -U postgres Planing > backup_\$(date +%Y%m%d).sql
+db = SessionLocal()
+try:
+    # Wir erstellen NUR den User. Da der Schema-Fix oben lief, 
+    # brauchen wir KEINEN Employee-Eintrag mehr für den Login/Audit-Log.
+    stmt = text("""
+        INSERT INTO users (username, email, hashed_password, is_admin, is_active, role)
+        VALUES (:u, :e, :p, true, true, 'admin')
+        ON CONFLICT (username) DO UPDATE 
+        SET hashed_password = :p, is_admin = true, is_active = true, role = 'admin'
+    """)
+    db.execute(stmt, {"u": username, "e": email, "p": hashed})
+    db.commit()
+    print("SUCCESS")
+except Exception as e:
+    print(f"ERROR: {e}")
+    sys.exit(1)
+finally:
+    db.close()
 EOF
 
-echo -e "${GREEN}📄 Zugangsdaten wurden in INSTALLATION_INFO.txt gespeichert${NC}"
+# ========================================================================
+# SCHRITT 8: Demo Daten (create_demo_data.py)
+# ========================================================================
 echo ""
+echo -e "${BLUE}🌱 Demo-Daten${NC}"
+echo "Möchten Sie Demo-Daten laden? (Patienten, Teams, Termine...)"
+read -p "Demo-Daten laden? (j/N): " -n 1 -r
+echo ""
+
+if [[ $REPLY =~ ^[JjYy]$ ]]; then
+    # Hier nutzen wir den korrekten Namen und setzen die Variable auf TRUE
+    if docker compose exec -T backend test -f create_demo_data.py; then
+        echo "Lade Demo-Daten (create_demo_data.py)..."
+        # Environment Variable setzen UND Script ausführen
+        docker compose exec -e INIT_DEMO_DATA=true -T backend python3 create_demo_data.py
+        
+        echo -e "${GREEN}✓ Demo-Daten Script ausgeführt.${NC}"
+    else
+        echo -e "${RED}❌ Konnte 'create_demo_data.py' nicht finden!${NC}"
+    fi
+else
+    echo "Überspringe Demo-Daten. System ist leer."
+fi
+
+# ========================================================================
+# FERTIG
+# ========================================================================
+echo ""
+echo -e "${GREEN}✅ Installation fertig!${NC}"
+echo "---------------------------------------------------"
+echo -e "🌍 URL:       $(grep FRONTEND_URL .env | cut -d '=' -f2 || echo 'http://localhost:3011')"
+echo -e "👤 User:      ${ADMIN_USER}"
+echo -e "🔑 Pass:      ${ADMIN_PASS}"
+echo "---------------------------------------------------"
