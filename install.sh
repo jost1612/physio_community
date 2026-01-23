@@ -26,56 +26,101 @@ if ! command -v openssl &> /dev/null; then echo -e "${RED}❌ openssl fehlt.${NC
 # ========================================================================
 echo -e "${BLUE}📝 Konfiguration...${NC}"
 
-# Standard-Werte
-DEFAULT_DOMAIN="localhost"
-DEFAULT_BACKEND_PORT="8011"
-DEFAULT_FRONTEND_PORT="3011"
-DEFAULT_ADMIN_EMAIL="admin@physio.ai"
-
 if [ ! -f ".env" ]; then
     if [ ! -f ".env.example" ]; then
         echo -e "${RED}❌ Keine .env.example gefunden!${NC}"
         exit 1
     fi
+
+    echo ""
+    echo -e "${YELLOW}Konfigurieren Sie Ihre Installation (Enter = Standardwert):${NC}"
+    echo ""
+
+    # Domain & Ports
+    read -p "🌐 Domain [localhost]: " INPUT_DOMAIN
+    DOMAIN="${INPUT_DOMAIN:-localhost}"
+
+    read -p "🔌 Backend Port [8011]: " INPUT_BACKEND_PORT
+    BACKEND_PORT="${INPUT_BACKEND_PORT:-8011}"
+
+    read -p "🔌 Frontend Port [3011]: " INPUT_FRONTEND_PORT
+    FRONTEND_PORT="${INPUT_FRONTEND_PORT:-3011}"
+
+    # Admin
+    read -p "📧 Admin E-Mail [admin@physio.ai]: " INPUT_ADMIN_EMAIL
+    ADMIN_EMAIL="${INPUT_ADMIN_EMAIL:-admin@physio.ai}"
+
+    # SMTP (optional)
+    echo ""
+    echo -e "${BLUE}📧 SMTP Konfiguration (optional, Enter = überspringen):${NC}"
+    read -p "   SMTP Host [smtp.gmail.com]: " INPUT_SMTP_HOST
+    SMTP_HOST="${INPUT_SMTP_HOST:-smtp.gmail.com}"
+
+    read -p "   SMTP Port [587]: " INPUT_SMTP_PORT
+    SMTP_PORT="${INPUT_SMTP_PORT:-587}"
+
+    read -p "   SMTP User []: " SMTP_USER
+
+    read -s -p "   SMTP Passwort []: " SMTP_PASS
+    echo ""
+
+    # KI (optional)
+    echo ""
+    echo -e "${BLUE}🤖 KI Konfiguration (optional):${NC}"
+    read -p "   Ollama URL [http://host.docker.internal:11434](http://host.docker.internal:11434): " INPUT_OLLAMA_URL
+    OLLAMA_BASE_URL="${INPUT_OLLAMA_URL:-http://host.docker.internal:11434}"
+
+    read -p "   Ollama Model [llama3.1:8b]: " INPUT_OLLAMA_MODEL
+    OLLAMA_MODEL="${INPUT_OLLAMA_MODEL:-llama3.1:8b}"
+
+    read -p "   OpenRouter API Key []: " OPENROUTER_API_KEY
+
+    # .env erstellen
+    echo ""
     echo "Erstelle .env aus .env.example..."
     cp .env.example .env
 
     # Passwörter generieren
-    echo "Generiere sichere Passwörter..."
     DB_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
     SECRET_KEY=$(openssl rand -base64 64 | tr -d "\n")
 
-    # URLs setzen
-    FRONTEND_URL="http://${DEFAULT_DOMAIN}:${DEFAULT_FRONTEND_PORT}"
-    BACKEND_URL="http://${DEFAULT_DOMAIN}:${DEFAULT_BACKEND_PORT}"
-    WEBAUTHN_RP_ID="${DEFAULT_DOMAIN}"
-    
-    # Ersetzen in der .env Datei
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        sed -i '' "s|DB_PASSWORD=.*|DB_PASSWORD=${DB_PASSWORD}|g" .env
-        sed -i '' "s|SECRET_KEY=.*|SECRET_KEY=${SECRET_KEY}|g" .env
-        sed -i '' "s|FRONTEND_URL=.*|FRONTEND_URL=${FRONTEND_URL}|g" .env
-        sed -i '' "s|NEXT_PUBLIC_API_URL=.*|NEXT_PUBLIC_API_URL=${BACKEND_URL}|g" .env
-        sed -i '' "s|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=${FRONTEND_URL}|g" .env
-        sed -i '' "s|ADMIN_EMAIL=.*|ADMIN_EMAIL=${DEFAULT_ADMIN_EMAIL}|g" .env
-        sed -i '' "s|WEBAUTHN_RP_ID=.*|WEBAUTHN_RP_ID=${WEBAUTHN_RP_ID}|g" .env
-        sed -i '' "s|BACKEND_PORT=.*|BACKEND_PORT=${DEFAULT_BACKEND_PORT}|g" .env
-        sed -i '' "s|FRONTEND_PORT=.*|FRONTEND_PORT=${DEFAULT_FRONTEND_PORT}|g" .env
+    # URLs berechnen
+    if [[ "$DOMAIN" == "localhost" ]]; then
+        FRONTEND_URL="http://${DOMAIN}:${FRONTEND_PORT}"
+        BACKEND_URL="http://${DOMAIN}:${BACKEND_PORT}"
     else
-        sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=${DB_PASSWORD}|g" .env
-        sed -i "s|SECRET_KEY=.*|SECRET_KEY=${SECRET_KEY}|g" .env
-        sed -i "s|FRONTEND_URL=.*|FRONTEND_URL=${FRONTEND_URL}|g" .env
-        sed -i "s|NEXT_PUBLIC_API_URL=.*|NEXT_PUBLIC_API_URL=${BACKEND_URL}|g" .env
-        sed -i "s|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=${FRONTEND_URL}|g" .env
-        sed -i "s|ADMIN_EMAIL=.*|ADMIN_EMAIL=${DEFAULT_ADMIN_EMAIL}|g" .env
-        sed -i "s|WEBAUTHN_RP_ID=.*|WEBAUTHN_RP_ID=${WEBAUTHN_RP_ID}|g" .env
-        sed -i "s|BACKEND_PORT=.*|BACKEND_PORT=${DEFAULT_BACKEND_PORT}|g" .env
-        sed -i "s|FRONTEND_PORT=.*|FRONTEND_PORT=${DEFAULT_FRONTEND_PORT}|g" .env
+        # Für echte Domains (mit HTTPS)
+        FRONTEND_URL="https://${DOMAIN}"
+        BACKEND_URL="https://${DOMAIN}/api"
     fi
-    echo -e "${GREEN}✓ .env Datei erstellt.${NC}"
+
+    # Alle Werte ersetzen (Linux)
+    sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=${DB_PASSWORD}|g" .env
+    sed -i "s|SECRET_KEY=.*|SECRET_KEY=${SECRET_KEY}|g" .env
+    sed -i "s|FRONTEND_URL=.*|FRONTEND_URL=${FRONTEND_URL}|g" .env
+    sed -i "s|NEXT_PUBLIC_API_URL=.*|NEXT_PUBLIC_API_URL=${BACKEND_URL}|g" .env
+    sed -i "s|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=${FRONTEND_URL}|g" .env
+    sed -i "s|ADMIN_EMAIL=.*|ADMIN_EMAIL=${ADMIN_EMAIL}|g" .env
+    sed -i "s|WEBAUTHN_RP_ID=.*|WEBAUTHN_RP_ID=${DOMAIN}|g" .env
+    sed -i "s|BACKEND_PORT=.*|BACKEND_PORT=${BACKEND_PORT}|g" .env
+    sed -i "s|FRONTEND_PORT=.*|FRONTEND_PORT=${FRONTEND_PORT}|g" .env
+
+    # SMTP (nur wenn User gesetzt)
+    sed -i "s|SMTP_HOST=.*|SMTP_HOST=${SMTP_HOST}|g" .env
+    sed -i "s|SMTP_PORT=.*|SMTP_PORT=${SMTP_PORT}|g" .env
+    [[ -n "$SMTP_USER" ]] && sed -i "s|SMTP_USER=.*|SMTP_USER=${SMTP_USER}|g" .env
+    [[ -n "$SMTP_PASS" ]] && sed -i "s|SMTP_PASS=.*|SMTP_PASS=${SMTP_PASS}|g" .env
+
+    # KI
+    sed -i "s|OLLAMA_BASE_URL=.*|OLLAMA_BASE_URL=${OLLAMA_BASE_URL}|g" .env
+    sed -i "s|OLLAMA_MODEL=.*|OLLAMA_MODEL=${OLLAMA_MODEL}|g" .env
+    [[ -n "$OPENROUTER_API_KEY" ]] && sed -i "s|OPENROUTER_API_KEY=.*|OPENROUTER_API_KEY=${OPENROUTER_API_KEY}|g" .env
+
+    echo -e "${GREEN}✓ .env Datei erstellt mit Ihren Einstellungen.${NC}"
 else
-    echo -e "${YELLOW}ℹ️  .env existiert bereits.${NC}"
+    echo -e "${YELLOW}ℹ️  .env existiert bereits. Überspringe Konfiguration.${NC}"
 fi
+
 
 # ========================================================================
 # SCHRITT 4: Container starten
